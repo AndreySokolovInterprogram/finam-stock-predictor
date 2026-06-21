@@ -22,7 +22,7 @@ class DatabaseConfig:
 class FinamConfig:
     token: str = os.getenv("FINAM_TOKEN", "")
     account_id: str = os.getenv("FINAM_ACCOUNT_ID", "")
-    base_url: str = os.getenv("API_BASE_URL", "https://trade-api.finam.ru")
+    base_url: str = os.getenv("API_BASE_URL", "https://api.finam.ru")
     timeout: int = int(os.getenv("API_TIMEOUT", "30"))
     rate_limit: int = int(os.getenv("API_RATE_LIMIT", "200"))
 
