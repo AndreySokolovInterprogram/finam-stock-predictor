@@ -1,58 +1,59 @@
-"""
-Клиент для работы с Finam Trade API.
-Использует официальную библиотеку finam-trade-api.
-"""
+"""Клиент для Finam Trade API. Исторические свечи через /v1/instruments/{symbol}/bars"""
 
 import os
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
+import aiohttp
 import pandas as pd
 from loguru import logger
 
-# Официальная библиотека Finam
-from finam_trade_api import Client
-from finam_trade_api import TokenManager
-
-from config import FINAM_CONFIG, DATA_CONFIG
+from config import FINAM_CONFIG
 
 
 @dataclass
 class CandleData:
-    """Структура данных свечи."""
     open_price: float
     high_price: float
     low_price: float
     close_price: float
     volume: int
     time: datetime
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "open": self.open_price,
-            "high": self.high_price,
-            "low": self.low_price,
-            "close": self.close_price,
-            "volume": self.volume,
-            "time": self.time,
-        }
 
 
 class FinamClient:
-    """
-    Клиент для Finam Trade API.
-    Обёртка над официальной библиотекой finam-trade-api.
-    """
+    """Клиент для Finam Trade API v1."""
+    
+    BASE_URL = "https://api.finam.ru"
+    
+    # MIC коды бирж
+    MIC_CODES = {
+        "MISX": "MISX",   # Мосбиржа
+        "XNGS": "XNGS",   # NASDAQ
+        "XNYS": "XNYS",   # NYSE
+        "XASE": "XASE",   # AMEX / NYSE American
+        "XNAS": "XNAS",   # NASDAQ (альтернатива)
+    }
+    
+    # Таймфреймы
+    TIMEFRAMES = {
+        "1m": 1,
+        "5m": 2,
+        "15m": 3,
+        "30m": 4,
+        "1h": 5,
+        "4h": 6,
+        "1d": 7,
+    }
     
     def __init__(self, token: Optional[str] = None):
         self.token = token or FINAM_CONFIG.token
-        self._client: Optional[Client] = None
+        self._jwt_token: Optional[str] = None
+        self._session: Optional[aiohttp.ClientSession] = None
         
         if not self.token:
-            raise ValueError("FINAM_TOKEN не задан! Проверь .env файл.")
-        
-        logger.info("FinamClient инициализирован")
+            raise ValueError("FINAM_TOKEN не задан!")
     
     async def __aenter__(self):
         await self.connect()
@@ -62,136 +63,99 @@ class FinamClient:
         await self.disconnect()
     
     async def connect(self):
-        """Устанавливает соединение и получает JWT."""
-        try:
-            token_manager = TokenManager(self.token)
-            self._client = Client(token_manager)
-            
-            # Получаем JWT токен
-            await self._client.access_tokens.set_jwt_token()
-            
-            # Проверяем что JWT получен
-            jwt_details = await self._client.access_tokens.get_jwt_token_details()
-            logger.info(f"JWT получен: {jwt_details}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка подключения: {e}")
-            raise
+        """Получает JWT и создаёт сессию."""
+        # Получаем JWT через POST /v1/sessions
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{self.BASE_URL}/v1/sessions",
+                headers={"Content-Type": "application/json"},
+                json={"secret": self.token}
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    self._jwt_token = data["token"]
+                    logger.info("JWT получен")
+                else:
+                    text = await resp.text()
+                    raise Exception(f"Auth failed: {resp.status} - {text}")
+        
+        # Создаём сессию с JWT
+        self._session = aiohttp.ClientSession(
+            headers={"Authorization": f"Bearer {self._jwt_token}"}
+        )
     
     async def disconnect(self):
-        """Закрывает соединение."""
-        if self._client:
-            logger.info("Соединение с Finam API закрыто")
-    
-    # ============================================================
-    # AUTH & ACCOUNT
-    # ============================================================
-    
-    async def get_account_info(self) -> Dict[str, Any]:
-        """Получает информацию об аккаунте."""
-        account_id = FINAM_CONFIG.account_id or ""
-        if not account_id:
-            logger.warning("FINAM_ACCOUNT_ID не задан!")
-            return {}
-        try:
-            return await self._client.account.get_account_info(account_id)
-        except Exception as e:
-            logger.error(f"Ошибка получения аккаунта: {e}")
-            return {}
-    
-    # ============================================================
-    # MARKET DATA - Через Export API (более надёжно)
-    # ============================================================
-    
-    async def get_candles_to_dataframe(
-        self,
-        board: str,
-        symbol: str,
-        timeframe: str = "1m",
-        from_date: Optional[datetime] = None,
-        to_date: Optional[datetime] = None,
-        count: int = 500,
-    ) -> pd.DataFrame:
-        """
-        Получает исторические свечи через Finam Export API.
-        Более надёжно чем Trade API для исторических данных.
-        """
-        async with FinamExportClient() as export:
-            df = await export.download_history(
-                symbol=symbol,
-                market=board,
-                period=timeframe,
-                from_date=from_date,
-                to_date=to_date,
-            )
-            logger.info(f"Получено {len(df)} свечей для {symbol} ({timeframe})")
-            return df
-
-
-# ============================================================
-# Finam Export API (для исторических данных)
-# ============================================================
-
-class FinamExportClient:
-    """Клиент для Finam Export API."""
-    
-    EXPORT_URL = "https://export.finam.ru"
-    
-    MARKETS = {"NYSE": 1, "NASDAQ": 2, "AMEX": 3, "US": 25, "MOEX": 1, "FORTS": 14, "SPBEX": 517}
-    PERIODS = {"ticks": 1, "1m": 2, "5m": 3, "10m": 4, "15m": 5, "30m": 6, "1h": 7, "1d": 8, "1w": 9, "1M": 10}
-    
-    def __init__(self):
-        import aiohttp
-        self._session = None
-        self.aiohttp = aiohttp
-    
-    async def __aenter__(self):
-        self._session = self.aiohttp.ClientSession()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._session:
             await self._session.close()
     
-    async def download_history(self, symbol: str, market: str = "US",
-                               period: str = "1m",
-                               from_date: Optional[datetime] = None,
-                               to_date: Optional[datetime] = None) -> pd.DataFrame:
-        """Скачивает исторические данные с Finam Export."""
-        import io
+    async def get_candles(
+        self,
+        symbol: str,
+        mic: str = "MISX",
+        timeframe: str = "1d",
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
+        count: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """
+        Получает свечи через /v1/instruments/{symbol}@mic/bars
         
-        market_code = self.MARKETS.get(market, 25)
-        period_code = self.PERIODS.get(period, 2)
+        Args:
+            symbol: Тикер (CABA, SBER и т.д.)
+            mic: MIC код биржи (XNGS, XNYS, MISX)
+            timeframe: 1m, 5m, 15m, 30m, 1h, 1d, 1w
+            from_date: Начальная дата
+            to_date: Конечная дата
+            count: Количество свечей (если не указаны даты)
+        """
+        tf_code = self.TIMEFRAMES.get(timeframe, "TIME_FRAME_D1")
         
-        params = {
-            "market": market_code, "em": 0, "code": symbol, "apply": 0,
-            "df": from_date.day if from_date else 1,
-            "mf": from_date.month - 1 if from_date else 0,
-            "yf": from_date.year if from_date else 2020,
-            "dt": to_date.day if to_date else 31,
-            "mt": to_date.month - 1 if to_date else 11,
-            "yt": to_date.year if to_date else 2025,
-            "p": period_code, "f": symbol, "e": ".csv", "cn": symbol,
-            "dtf": 1, "tmf": 1, "MSOR": 0, "mstime": "on", "mstimever": 1,
-            "sep": 1, "sep2": 1, "datf": 5, "at": 0,
-        }
+        params = {"timeframe": tf_code}
         
-        url = f"{self.EXPORT_URL}/{symbol}.csv"
-        async with self._session.get(url, params=params) as response:
-            if response.status == 200:
-                content = await response.text()
-                df = pd.read_csv(io.StringIO(content), header=None,
-                                 names=["ticker", "period", "date", "time", "open", "high", "low", "close", "volume"])
-                df["datetime"] = pd.to_datetime(df["date"].astype(str) + " " + df["time"].astype(str).str.zfill(6),
-                                                  format="%Y%m%d %H%M%S")
-                df.set_index("datetime", inplace=True)
-                df.drop(columns=["ticker", "period", "date", "time"], inplace=True)
-                logger.info(f"Скачано {len(df)} строк для {symbol} ({period})")
+        if from_date:
+            params["interval.start_time"] = from_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if to_date:
+            params["interval.end_time"] = to_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        url = f"{self.BASE_URL}/v1/instruments/{symbol}@{mic}/bars"
+        
+        logger.info(f"Запрос: {symbol}@{mic}, {timeframe}")
+        
+        async with self._session.get(url, params=params) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                bars = data.get("bars", [])
+                
+                if not bars:
+                    logger.warning(f"Нет данных для {symbol}")
+                    return pd.DataFrame()
+                
+                candles = []
+                for bar in bars:
+                    candles.append({
+                        "open": float(bar["open"]["value"]),
+                        "high": float(bar["high"]["value"]),
+                        "low": float(bar["low"]["value"]),
+                        "close": float(bar["close"]["value"]),
+                        "volume": int(float(bar.get("volume", {}).get("value", 0))) if isinstance(bar.get("volume"), dict) else int(float(bar.get("volume", 0))),
+                        "time": datetime.fromisoformat(bar["timestamp"].replace("Z", "+00:00")),
+                    })
+                
+                df = pd.DataFrame(candles)
+                if not df.empty:
+                    df.set_index("time", inplace=True)
+                    df.sort_index(inplace=True)
+                
+                logger.info(f"Получено {len(df)} свечей")
                 return df
+                
+            elif resp.status == 400:
+                text = await resp.text()
+                logger.error(f"400 Bad Request: {text}")
+                raise Exception(f"Неверный символ или интервал. Проверьте формат {symbol}@{mic}")
             else:
-                text = await response.text()
-                logger.error(f"Export API failed: {response.status} - {text}")
-                raise Exception(f"Failed to download data: {response.status}")
+                text = await resp.text()
+                raise Exception(f"HTTP {resp.status}: {text}")
 
 
 # ============================================================
@@ -201,8 +165,34 @@ class FinamExportClient:
 import asyncio
 
 class FinamClientSync:
-    """Синхронная обёртка над асинхронным клиентом."""
-    
-    def __init__(self, token: Optional[str] = None):
+    def __init__(self, token=None):
         self._client = FinamClient(token)
-        self
+        self._loop = asyncio.new_event_loop()
+    
+    def __enter__(self):
+        self._loop.run_until_complete(self._client.connect())
+        return self
+    
+    def __exit__(self, *args):
+        self._loop.run_until_complete(self._client.disconnect())
+        self._loop.close()
+    
+    def get_candles(self, **kwargs):
+        return self._loop.run_until_complete(self._client.get_candles(**kwargs))
+
+
+if __name__ == "__main__":
+    async def test():
+        async with FinamClient() as client:
+            print("=== CABA (NASDAQ) ===")
+            df = await client.get_candles(
+                symbol="CABA",
+                mic="XNGS",
+                timeframe="1d",
+                from_date=datetime.now() - timedelta(days=7),
+                to_date=datetime.now(),
+            )
+            print(f"Получено: {len(df)}")
+            print(df)
+    
+    asyncio.run(test())

@@ -23,7 +23,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Загрузка исторических данных с Finam")
     parser.add_argument("--symbol", type=str, help="Тикер акции")
     parser.add_argument("--symbols", type=str, help="Список тикеров через запятую")
-    parser.add_argument("--board", type=str, default="US")
+    parser.add_argument("--mic", type=str, default="XNGS", help="MIC код биржи")
     parser.add_argument("--timeframe", type=str, default="1m")
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--options", action="store_true", help="Загрузить опционный чейн")
@@ -42,7 +42,7 @@ async def main():
         elif args.symbol:
             symbol = args.symbol.upper()
             logger.info(f"Загрузка данных для {symbol}")
-            df = await fetcher.fetch_stock_candles(symbol=symbol, board=args.board,
+            df = await fetcher.fetch_stock_candles(symbol=symbol, mic=args.mic,
                                                     timeframe=args.timeframe, days=args.days)
             logger.info(f"Загружено {len(df)} записей для {symbol}")
             print(df.head())
