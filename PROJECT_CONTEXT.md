@@ -13,7 +13,7 @@
 | **IDE** | VS Code |
 | **База данных** | PostgreSQL 16 |
 | **GUI БД** | DBeaver |
-| **API** | Finam Trade API (JWT) + Finam Export API (CSV) |
+| **API** | Finam Trade API (JWT) |
 | **ОС** | Windows 10/11 |
 | **Репозиторий** | https://github.com/AndreySokolovInterprogram/finam-stock-predictor |
 
@@ -43,14 +43,22 @@
 | Параметр | Значение |
 |----------|----------|
 | **Токен** | ✅ Получен и работает |
-| **JWT** | ✅ Получается автоматически через `finam-trade-api` |
-| **Account ID** | `2045914` (без "К№-" префикса) |
+| **JWT** | ✅ Получается через POST /v1/sessions |
+| **Account ID** | `2045914` |
 | **Base URL** | `https://api.finam.ru` |
 
-### ⚠️ Известные проблемы с API:
-- **Библиотека `finam-trade-api`** имеет баг: `positions` требует поле `quantity`, которого нет в ответе сервера. Это не критично — JWT и account работают.
-- **Trade API** не предоставляет исторические данные (только real-time).
-- **Export API** (`https://export.finam.ru`) используется для исторических OHLCV данных.
+### Endpoints:
+
+| Endpoint | Метод | Описание |
+|----------|-------|----------|
+| `/v1/sessions` | POST | Получение JWT |
+| `/v1/instruments/{symbol}@{mic}/bars` | GET | Свечи акций (timeframe=1 для M1) |
+| `/v1/assets/{symbol}@{mic}/options` | GET | Цепочка опционов (нужна дата экспирации) |
+
+### ⚠️ Известные проблемы:
+- **Rate limit:** API не выдерживает &gt;1 запроса/сек, нужен `time.sleep(2)`
+- **Таймфрейм:** только M1 (1), дневки не поддерживаются
+- **Опционы:** требуется точная дата экспирации (year/month/day)
 
 ---
 
@@ -58,28 +66,30 @@
 
 - [x] Структура проекта
 - [x] Модели БД (5 таблиц: tickers, candles, options, option_candles, predictions)
-- [x] API клиент с JWT-аутентификацией (через `finam-trade-api`)
-- [x] Finam Export API клиент (CSV загрузка)
+- [x] API клиент с JWT (FinamClient)
 - [x] Загрузчик данных (HistoricalDataFetcher)
 - [x] Логирование (loguru)
 - [x] GitHub репозиторий
-- [x] `.gitignore` (защита секретов)
-- [x] PostgreSQL установлена
-- [x] DBeaver подключён
-- [x] База `finam_predictor` создана
-- [x] Таблицы инициализированы
-- [x] Токен Finam получен
-- [x] JWT работает
-- [x] Account ID найден (2045914)
+- [x] `.gitignore`
+- [x] PostgreSQL + DBeaver
+- [x] Токен Finam получен, JWT работает
+- [x] **Получены свечи CABA@XNGS за 7 дней: 1314 минутных свечей**
+- [x] **Сохранены в PostgreSQL**
+- [x] **Найден endpoint опционов: `/v1/assets/{symbol}@mic/options`**
+- [x] **Получены 138 опционов CABA (7 экспираций, страйки 0.5-7.5)**
+- [x] **Получены исторические свечи для отдельных опционов**
+- [x] Исправлен парсинг candle_time (Timestamp → datetime)
+- [x] Исправлен парсинг volume (dict → float → int)
+- [x] fetch_data.py работает с `--mic` параметром
 
 ---
 
 ## ⬜ Следующие шаги
 
-- [ ] Исправить `src/data_fetcher/__init__.py` (добавить экспорт HistoricalDataFetcher)
-- [ ] Исправить `src/api/finam_client.py` (убрать несуществующие методы .securities, .market_data)
-- [ ] Протестировать загрузку данных через Export API
-- [ ] Data pipeline (регулярная загрузка)
+- [ ] Получить котировки опционов CABA (страйки 2-7, Call+Put, 7 дней истории)
+- [ ] Доработать БД для хранения опционов (таблица option_candles)
+- [ ] Автоматическое определение дат экспирации опционов
+- [ ] Data pipeline: регулярная загрузка акций + опционов
 - [ ] Технические индикаторы (фичи для нейросети)
 - [ ] Нейросеть (LSTM/Transformer)
 - [ ] Backtesting
@@ -87,21 +97,27 @@
 
 ---
 
-## 📁 Структура проекта (ключевые файлы)
+## 📁 Структура проекта
 finam-stock-predictor/
-├── .env                          # Токены и пароли (НЕ в git!)
+├── .env                          # Токены (НЕ в git!)
 ├── config/settings.py            # Конфигурация
 ├── src/
-│   ├── api/finam_client.py      # API клиент (JWT + Export)
-│   ├── database/models.py        # SQLAlchemy модели
-│   ├── data_fetcher/             # ⚠️ init.py пустой — нужен экспорт
-│   └── utils/logger.py           # Логирование
+│   ├── api/
+│   │   ├── init.py
+│   │   └── finam_client.py       # FinamClient + FinamClientSync
+│   ├── data_fetcher/
+│   │   ├── init.py
+│   │   └── historical_data.py    # HistoricalDataFetcher
+│   ├── database/
+│   │   ├── init.py
+│   │   └── models.py             # SQLAlchemy модели
+│   └── utils/
+│       └── logger.py
 ├── scripts/
-│   ├── init_db.py                # Инициализация БД
-│   ├── test_connection.py        # Тест API (JWT + аккаунт)
-│   └── fetch_data.py             # Загрузка данных
+│   ├── fetch_data.py             # Загрузка свечей (--symbol --mic --days --timeframe)
+│   ├── init_db.py
+│   └── test_connection.py
 └── PROJECT_CONTEXT.md            # Этот файл
-
 
 ---
 
@@ -109,40 +125,20 @@ finam-stock-predictor/
 
 | Баг | Где | Решение |
 |-----|-----|---------|
-| `__init__.py` пустой | `src/data_fetcher/__init__.py` | Добавить `from .historical_data import HistoricalDataFetcher` |
-| Несуществующие методы | `src/api/finam_client.py` | Убрать `.securities`, `.market_data`, `.get_option_chain`. Использовать только Export API для данных |
-| Pydantic validation error | `finam-trade-api` library | Баг в библиотеке, игнорировать или обновить |
+| API timeout при массовых запросах | Finam API | `time.sleep(2)` между запросами |
+| Таймфрейм 1d не работает | Finam Trade API | Использовать только M1 (1) |
+| psycopg2 InvalidSchemaName | historical_data.py | `pd.to_datetime(str(idx)).to_pydatetime().replace(tzinfo=None)` |
 
 ---
 
-## 🚀 Быстрый старт (если чат новый)
+## 🚀 Быстрый старт
 
 ```bash
-# 1. Активировать venv
+# Активировать venv
 venv\Scripts\activate
 
-# 2. Проверить JWT
+# Проверить JWT
 python scripts/test_connection.py
 
-# 3. Загрузить данные (после исправления багов)
-python scripts/fetch_data.py --symbol AAPL --days 7 --timeframe 1d
-
-🔐 Безопасность
-.env в .gitignore (токены не утекают)
-Пароль PostgreSQL: 1289 (локально)
-Account ID: 2045914
-
-
----
-
-## 🔧 Исправления кода (сразу сделай)
-
-### 1. `src/data_fetcher/__init__.py`
-
-Открой файл и вставь:
-
-```python
-from src.data_fetcher.historical_data import HistoricalDataFetcher
-
-__all__ = ["HistoricalDataFetcher"]
-
+# Загрузить свечи акций
+python scripts/fetch_data.py --symbol CABA --mic XNGS --days 7 --timeframe 1m
