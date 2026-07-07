@@ -47,4 +47,5 @@ models/*.pth
 models/*.h5
 
 data/raw/
-data/processed/
+data/processed/venv_wsl/
+venv_wsl/
