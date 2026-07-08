@@ -74,6 +74,10 @@ class HistoricalDataFetcher:
                 data[symbol] = result
 
         return data
+    
+    async def fetch_option_chain(self, symbol: str, mic: str = None) -> pd.DataFrame:
+        """Получить опционный чейн через FinamClient"""
+        return await self.client.fetch_option_chain(symbol, mic)
 
     def _save_to_db(self, symbol, mic, timeframe, df):
         """Сохраняет свечи в БД по одной с обработкой ошибок."""

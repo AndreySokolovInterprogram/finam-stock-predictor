@@ -38,13 +38,13 @@ class FinamClient:
     
     # Таймфреймы
     TIMEFRAMES = {
-        "1m": 1,
-        "5m": 2,
-        "15m": 3,
-        "30m": 4,
-        "1h": 5,
-        "4h": 6,
-        "1d": 7,
+        "1m": "TIME_FRAME_M1",
+        "5m": "TIME_FRAME_M5",
+        "15m": "TIME_FRAME_M15",
+        "30m": "TIME_FRAME_M30",
+        "1h": "TIME_FRAME_H1",
+        "4h": "TIME_FRAME_H4",
+        "1d": "TIME_FRAME_D",    
     }
     
     def __init__(self, token: Optional[str] = None):
@@ -156,6 +156,45 @@ class FinamClient:
             else:
                 text = await resp.text()
                 raise Exception(f"HTTP {resp.status}: {text}")
+            
+    async def fetch_option_chain(self, symbol: str, mic: str = None) -> pd.DataFrame:
+        """Получить опционный чейн для актива"""
+        if mic is None:
+            mic = self.default_mic
+    
+        url = f"{self.BASE_URL}/v1/assets/{symbol}@{mic}/options"
+    
+        async with self._session.get(url) as response:
+            response.raise_for_status()
+            data = await response.json()
+    
+        options = data.get("options", [])
+        if not options:
+            return pd.DataFrame()
+    
+        # Преобразуем в DataFrame
+        rows = []
+        for opt in options:
+            rows.append({
+                "symbol": opt.get("symbol"),
+                "type": opt.get("type", "").replace("TYPE_", ""),
+                "strike": float(opt.get("strike", {}).get("value", 0)),
+                "contract_size": float(opt.get("contract_size", {}).get("value", 100)),
+                "expiration_date": datetime(
+                    opt.get("expiration_first_day", {}).get("year", 2026),
+                    opt.get("expiration_first_day", {}).get("month", 1),
+                    opt.get("expiration_first_day", {}).get("day", 1)
+                ),
+                "trade_last_day": datetime(
+                    opt.get("trade_last_day", {}).get("year", 2026),
+                    opt.get("trade_last_day", {}).get("month", 1),
+                    opt.get("trade_last_day", {}).get("day", 1)
+                ),
+                "multiplier": float(opt.get("multiplier", {}).get("value", 100)),
+            })
+    
+        df = pd.DataFrame(rows)
+        return df        
 
 
 # ============================================================
@@ -196,3 +235,4 @@ if __name__ == "__main__":
             print(df)
     
     asyncio.run(test())
+
